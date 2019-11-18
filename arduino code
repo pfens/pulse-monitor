@@ -1,27 +1,21 @@
 #include <SoftwareSerial.h> 
 #include <OneWire.h> //pomocna biblioteka pri spajanju tri pina od temp. senzora u jedan izlaz (zicu)
 #include <DallasTemperature.h> //biblioteka koja cini rad sa temp. senzorom laksim
-//biblioteke preuzete sa:
-//http://www.hobbytronics.co.uk/ds18b20-arduino
-//https://www.arduinolibraries.info/libraries/one-wire
-
 #define ONE_WIRE_BUS 2
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 
 //incijalizacija heartBeatSensor pinova
-int pulsePin = ; 
-int blinkPin = ;
+int pulsePin = 0; 
+int blinkPin = 13;
 
-//signal koji ocitavamo jeste promena otpornosti fotootpornika na senzoru koju predstavljamo kao talas  
+//signal koji ocitavamo je promena otpornosti fotootpornika na senzoru 
+volatile int fotoOtpornost;
+volatile int maxOtpornost = 512;        
+volatile int minOtpornost = 512;          
+volatile int threshold = 512;    //odrednica kada je ocitan 1 oscilacija tj otkucaj
 
-//promenjive koje nam sluze pri ocitavanju signala(talasa) sa ulaza
-volatile int Signal;
-volatile int max = 512;          //peak talasa
-volatile int min = 512;          //through talasa
-volatile int threshold = 512;    //odrednica kada je ocitan 1 talas tj otkucaj
-
-//promenjive koje nam sluze pri izracunavanju intervala izmedju otkucaja
+//intervali izmedju otkucaja
 volatile int IBI = 600;                        //InterBeatInterval seedovan na 600 jer je normaln IBI izmedju 600ms i 900ms
 volatile unsigned long msBrojac = 0;           //brojac milisekundi
 volatile unsigned long poslednjiPeriod = 0;    //izmereno vreme za poslednji otkucaj
@@ -33,11 +27,11 @@ volatile boolean prviOtkucaj = true;
 volatile boolean drugiOtkucaj = false;
 volatile boolean Puls = false;
 
-//izlazna vrednost
+//izlazna vrednost koju pushujemo na app
 volatile int BPM;
 
-
-void interruptSetup(){  //Inicijalizuje Timer2 koji nabacuje interrupt svake 2ms
+void interruptSetup(){  
+//Inicijalizuje Timer2 koji nabacuje interrupt svake 2ms
 //Timer2 postara se da se podaci ocitavaju svake dve milisekunde
 
   TCCR2A = 0x02;     // DISABLE PWM ON DIGITAL PINS 3 AND 11, AND GO INTO CTC MODE
@@ -49,23 +43,24 @@ void interruptSetup(){  //Inicijalizuje Timer2 koji nabacuje interrupt svake 2ms
 
 ISR(TIMER2_COMPA_vect) {                   //InterruptServiceRoutine
   cli();                                   //gasi globalni interrupt flag u status registru
-  Signal = analogRead(PulsePin);           //signal koju ocitavamo sa senzorskog pina
+  fotoOtpornost = analogRead(PulsePin);           //signal koji ocitavamo sa senzorskog pina
   msBrojac += 2;                           //inkrementiramo brojac za vreme od 2ms
   int n = msBrojac - poslednjiPeriod;      //posmatramo vreme mereno od poslednjeg otkucaja
 
   //odredjujemo najmanju i najvecu vrednost signala koji primamo
-  if (Signal < threshold && n > (IBI / 5) * 3) {    //izbegavamo zapise preskakanja srca ili ekstrasistole (dupli otkucaj tokom jednog perioda)
-    if (Signal < min) {
-      min = Signal;                                 //lowest point of the pulse
+  //izbegavamo zapise preskakanja srca ili ekstrasistole (dupli otkucaj tokom jednog perioda) pomocu formule (IBI / 5) * 3
+  if (fotoOtpornost < threshold && n > (IBI / 5) * 3) {    
+    if (fotoOtpornost < minOtpornost) {
+      minOtpornost = fotoOtpornost;                                 //lowest point of the pulse
     }
   }
-  if (Signal > threshold && Signal > max) {         //highest point of the pulse
-    max = Signal;
+  if (fotoOtpornost > threshold && fotoOtpornost > maxOtpornost) {         //highest point of the pulse
+    maxOtpornost = fotoOtpornost;
   }
 
 
   if (n > 250) {
-    if ( (Signal > threshold) && (Otkucaj == false) && (n > (IBI / 5) * 3) ) {
+    if ( (fotoOtpornost > threshold) && (Otkucaj == false) && (n > (IBI / 5) * 3) ) {
       Otkucaj = true;
       digitalWrite(blinkPin, HIGH);        
       IBI = msBrojac - poslednjiPeriod;    //prvo izmereno vreme (interval) izmedju 2 otkucaja
@@ -97,15 +92,16 @@ ISR(TIMER2_COMPA_vect) {                   //InterruptServiceRoutine
     }
   }
 
-  if (Signal < threshold && Otkucaj == true) {
+  if (fotoOtpornost < threshold && Otkucaj == true) {
     digitalWrite(blinkPin, LOW);       //ne pali lampicu ako je preslab signal
     Otkucaj = false;
   }
 
-  if (n > 2500) {         //ako 2 i po sekunde nema ni jednog otkucaja restartuj brojace
+  //ako 2 i po sekunde nema ni jednog otkucaja restartuj brojace
+  if (n > 2500) {         
     threshold = 512;      //vrati threshold na default stanje
-    max = 512;
-    min = 512;
+    maxOtpornost = 512;
+    minOtpornost = 512;
     poslednjiPeriod = msBrojac;   //nema poslednjeg, idemo jono nanovo
     prviOtkucaj = true;
     drugiOtkucaj = false;
@@ -113,7 +109,8 @@ ISR(TIMER2_COMPA_vect) {                   //InterruptServiceRoutine
   sei();
 }  //kraj rutine
 
-SoftwareSerial Bluetooth(10, 9);  //setup za bluetooth modul
+//setup za bluetooth modul
+SoftwareSerial Bluetooth(10, 9);  
 void setup() {
   Bluetooth.begin(9600);
   Serial.begin(9600);
